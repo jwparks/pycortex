@@ -307,6 +307,11 @@ var dataset = (function(module) {
             this._dispatch({type:"attribute", name:"nanmask", value:combined});
         }
     }
+    module.DataView.prototype.loadRest = function() {
+        for (var i = 0; i < this.data.length; i++)
+            if (this.data[i].loadRest)
+                this.data[i].loadRest();
+    };
     module.DataView.prototype.setFilter = function(interp) {
         this.filter = interp;
         for (var i = 0; i < this.data.length; i++)
@@ -330,8 +335,25 @@ var dataset = (function(module) {
         this.frames = images[json.name].length;
 
         this._interp = "nearest";
-        this.textures = [];
+        // Sparse frame store: textures[i] is frame i or undefined. Movies
+        // stop after the first frame (QC users mostly click for on-demand
+        // timeseries served by python); loadRest() resumes the stream, and
+        // setPriority() re-aims it (e.g. after a click on the timeseries
+        // plot seeks to an unloaded frame).
+        this.textures = new Array(this.frames);
+        this._nloaded = 0;
+        this._priority = 0;
+        this._inflight = false;
+        this._deferred = this.movie;
+        var nextFrame = function() {
+            for (var i = this._priority; i < this.frames; i++)
+                if (this.textures[i] === undefined) return i;
+            for (var j = 0; j < this._priority; j++)
+                if (this.textures[j] === undefined) return j;
+            return -1;
+        }.bind(this);
         var loadmosaic = function(idx) {
+            this._inflight = true;
             var img = new Image();
             img.addEventListener("load", function() {
                 this._width = img.width;
@@ -357,22 +379,64 @@ var dataset = (function(module) {
                 tex.needsUpdate = true;
                 tex.flipY = false;
                 this.shape = [((img.width-1) / this.mosaic[0])-1, ((img.height-1) / this.mosaic[1])-1];
-                this.textures.push(tex);
+                this.textures[idx] = tex;
+                this._nloaded += 1;
+                this._inflight = false;
 
-                if (this.textures.length < this.frames) {
-                    this.loaded.notify(this.textures.length);
-                    loadmosaic(this.textures.length);
+                if (this._nloaded < this.frames) {
+                    this.loaded.notify(this._nloaded);
+                    if (this._deferred) {
+                        this._paused = true;
+                        // Auto-resume shortly: loading 4D data implies the
+                        // user wants the movie eventually, but a brief pause
+                        // lets the surface mesh win the initial bandwidth
+                        // race. Playback/slider resumes immediately instead.
+                        setTimeout(this.loadRest.bind(this), 2000);
+                    } else {
+                        var nxt = nextFrame();
+                        if (nxt >= 0)
+                            loadmosaic(nxt);
+                    }
                 } else {
                     this.loaded.resolve();
                 }
             }.bind(this));
-            img.src = this.data[this.textures.length];
+            img.src = this.data[idx];
         }.bind(this);
+        this._loadmosaic = loadmosaic;
+        this._nextFrame = nextFrame;
 
         loadmosaic(0);
     };
+    module.VolumeData.prototype.loadRest = function() {
+        this._deferred = false;
+        if (this._paused) {
+            this._paused = false;
+            var nxt = this._nextFrame();
+            if (nxt >= 0 && !this._inflight)
+                this._loadmosaic(nxt);
+        }
+    };
+    // Aim the background stream at a frame (and those after it) — used when
+    // the user seeks to a not-yet-loaded part of the movie.
+    module.VolumeData.prototype.setPriority = function(frame) {
+        if (!this.movie || this._nloaded >= this.frames)
+            return;
+        this._priority = Math.max(0, Math.min(this.frames - 1, Math.round(frame)));
+        this._deferred = false;
+        if (!this._inflight) {
+            this._paused = false;
+            var nxt = this._nextFrame();
+            if (nxt >= 0)
+                this._loadmosaic(nxt);
+        }
+        // if a frame is in flight, the chain picks up the new priority on
+        // its next step
+    };
     module.VolumeData.prototype.setFilter = function(interp) {
         for (var i = 0, il = this.textures.length; i < il; i++) {
+            if (this.textures[i] === undefined)
+                continue;
             this.textures[i].minFilter = module.filtertypes[interp];
             this.textures[i].magFilter = module.filtertypes[interp];
             this.textures[i].needsUpdate = true;
