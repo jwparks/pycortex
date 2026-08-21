@@ -316,11 +316,14 @@ var jsplot = (function (module) {
     }
 
     // Timeseries QC panel: overlays the picked voxel's timecourse for every
-    // checked dataset (plus optional reference traces such as design-matrix
-    // regressors) fetched on demand from the /timeseries handler. The 4D
-    // data never loads into the browser for this — each pick fetches ~2 KB
-    // per checked dataset, so it works while movie frames are still
-    // streaming. Clicking the plot seeks the brain to that timepoint.
+    // checked dataset channel (plus optional reference traces such as
+    // design-matrix regressors) fetched on demand from the /timeseries
+    // handler. The 4D data never loads into the browser for this — each
+    // pick fetches ~2 KB per checked dataset, so it works while movie
+    // frames are still streaming. Clicking the plot seeks the brain to
+    // that timepoint. RGB datasets expose one checkbox + color picker per
+    // channel and draw a blended color strip (always mixing all three
+    // channels — the strip shows what is painted on the brain).
     module.TimeseriesAxes = function(figure, viewer) {
         module.Axes.call(this, figure);
         this.viewer = viewer || null;
@@ -330,7 +333,7 @@ var jsplot = (function (module) {
         this.object.style.display = "flex";
         this.object.style.flexDirection = "column";
 
-        // control strip: one checkbox + color picker per trace
+        // control strip: one group per trace
         this.controls = document.createElement("div");
         var cs = this.controls.style;
         cs.display = "flex";
@@ -371,7 +374,8 @@ var jsplot = (function (module) {
         this.canvas.style.minHeight = "0";
         this.object.appendChild(this.canvas);
 
-        this.traces = {};   // name -> {on, color, type: 'data'|'ref', resp, ref}
+        // name -> {type: 'data'|'ref', resp, ref, channels: [{on, color}]}
+        this.traces = {};
         this.order = [];
         this.label = "";
         this.message = "Click a voxel to plot its timeseries";
@@ -389,9 +393,9 @@ var jsplot = (function (module) {
             this.viewer.seekFrame(Math.round(fx * (this._xmap.n - 1)));
         }.bind(this));
 
-        // one control per movie dataset (3D views have no timecourse); the
-        // active one starts checked, or the first movie if the active view
-        // is a plain 3D volume
+        // one control group per movie dataset (3D views have no
+        // timecourse); the active one starts checked, or the first movie
+        // if the active view is a plain 3D volume
         if (viewer && viewer.dataviews) {
             var names = Object.keys(viewer.dataviews);
             var movies = names.filter(function(nm) {
@@ -399,8 +403,10 @@ var jsplot = (function (module) {
             });
             var def = (viewer.active && viewer.active.frames > 1)
                 ? viewer.active.name : movies[0];
-            for (var i = 0; i < movies.length; i++)
-                this.addTrace(movies[i], "data", movies[i] === def);
+            for (var i = 0; i < movies.length; i++) {
+                var nch = viewer.dataviews[movies[i]].data[0].raw ? 3 : 1;
+                this.addTrace(movies[i], "data", movies[i] === def, nch);
+            }
         }
         setTimeout(this.resize.bind(this), 0);
     }
@@ -410,58 +416,94 @@ var jsplot = (function (module) {
         bg: "#0D1117", text: "#E8ECF5", muted: "#9AA3B5",
         spine: "#3A4250", play: "#FFB454",
         font: "11px sans-serif",
-        chans: {R: "#FF6B6B", G: "#5DD97C", B: "#6FA8FF"},
         dataColors: ["#6FA8FF", "#FF6B6B", "#5DD97C", "#FFB454", "#B48EAD", "#66D9E8"],
         refColors: ["#C8A96E", "#B48EAD", "#8FBCBB", "#D08770"],
+        // per-channel defaults for RGB datasets: the first gets true
+        // R/G/B, later ones get shifted triads so overlays stay readable
+        rgbTriads: [["#FF6B6B", "#5DD97C", "#6FA8FF"],
+                    ["#FFA94D", "#3BC9DB", "#B197FC"],
+                    ["#F783AC", "#A9E34B", "#748FFC"]],
     };
-    module.TimeseriesAxes.prototype.addTrace = function(name, type, on) {
+    module.TimeseriesAxes.prototype._anyOn = function(t) {
+        for (var i = 0; i < t.channels.length; i++)
+            if (t.channels[i].on)
+                return true;
+        return false;
+    }
+    module.TimeseriesAxes.prototype.addTrace = function(name, type, on, nchan) {
         if (this.traces[name])
             return this.traces[name];
         var S = this.style;
-        var nsame = 0;
-        for (var i = 0; i < this.order.length; i++)
-            if (this.traces[this.order[i]].type === type)
-                nsame++;
-        var palette = type === "ref" ? S.refColors : S.dataColors;
-        var t = {on: !!on, color: palette[nsame % palette.length],
-                 type: type, resp: null, ref: null};
+        nchan = nchan || 1;
+        var nScalar = 0, nRGB = 0, nRef = 0;
+        for (var i = 0; i < this.order.length; i++) {
+            var o = this.traces[this.order[i]];
+            if (o.type === "ref") nRef++;
+            else if (o.channels.length === 3) nRGB++;
+            else nScalar++;
+        }
+        var colors;
+        if (type === "ref")
+            colors = [S.refColors[nRef % S.refColors.length]];
+        else if (nchan === 3)
+            colors = S.rgbTriads[nRGB % S.rgbTriads.length];
+        else
+            colors = [S.dataColors[nScalar % S.dataColors.length]];
+
+        var t = {type: type, resp: null, ref: null, channels: []};
+        for (var c = 0; c < nchan; c++)
+            t.channels.push({on: !!on, color: colors[c]});
         this.traces[name] = t;
         this.order.push(name);
 
-        var lab = document.createElement("label");
-        lab.style.display = "flex";
-        lab.style.alignItems = "center";
-        lab.style.gap = "4px";
-        lab.style.cursor = "pointer";
-        lab.style.font = S.font;
-        lab.style.color = type === "ref" ? S.muted : S.text;
-        var cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.checked = t.on;
-        cb.style.margin = "0";
-        cb.addEventListener("change", function() {
-            t.on = cb.checked;
-            if (t.on && t.type === "data" && !t.resp)
-                this.refetch();
-            this.draw();
-        }.bind(this));
-        var col = document.createElement("input");
-        col.type = "color";
-        col.value = t.color;
-        col.style.width = "15px";
-        col.style.height = "15px";
-        col.style.padding = "0";
-        col.style.border = "none";
-        col.style.background = "none";
-        col.style.cursor = "pointer";
-        col.addEventListener("input", function() {
-            t.color = col.value;
-            this.draw();
-        }.bind(this));
-        lab.appendChild(cb);
-        lab.appendChild(col);
-        lab.appendChild(document.createTextNode(name));
-        this.controls.appendChild(lab);
+        var group = document.createElement("span");
+        group.style.display = "flex";
+        group.style.alignItems = "center";
+        group.style.gap = "5px";
+        group.style.font = S.font;
+        group.style.color = type === "ref" ? S.muted : S.text;
+        var txt = document.createElement("span");
+        txt.textContent = name;
+        group.appendChild(txt);
+
+        var chanNames = nchan === 3 ? ["R", "G", "B"] : [""];
+        var self = this;
+        t.channels.forEach(function(ch, ci) {
+            var pair = document.createElement("label");
+            pair.style.display = "flex";
+            pair.style.alignItems = "center";
+            pair.style.gap = "2px";
+            pair.style.cursor = "pointer";
+            var cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.checked = ch.on;
+            cb.style.margin = "0";
+            cb.addEventListener("change", function() {
+                ch.on = cb.checked;
+                if (ch.on && t.type === "data" && !t.resp)
+                    self.refetch();
+                self.draw();
+            });
+            var col = document.createElement("input");
+            col.type = "color";
+            col.value = ch.color;
+            col.style.width = "15px";
+            col.style.height = "15px";
+            col.style.padding = "0";
+            col.style.border = "none";
+            col.style.background = "none";
+            col.style.cursor = "pointer";
+            col.addEventListener("input", function() {
+                ch.color = col.value;
+                self.draw();
+            });
+            pair.appendChild(cb);
+            pair.appendChild(col);
+            if (chanNames[ci])
+                pair.appendChild(document.createTextNode(chanNames[ci]));
+            group.appendChild(pair);
+        });
+        this.controls.appendChild(group);
         return t;
     }
     module.TimeseriesAxes.prototype.refetch = function() {
@@ -479,14 +521,14 @@ var jsplot = (function (module) {
         this.draw();
     }
     module.TimeseriesAxes.prototype.update = function(name, resp, label) {
-        var t = this.addTrace(name, "data", true);
+        var t = this.addTrace(name, "data", true, resp.data.length);
         t.resp = resp;
         this.label = label;
         // register reference traces (design-matrix regressors); they start
         // unchecked so QC stays uncluttered by default
         if (resp.refs) {
             for (var rname in resp.refs) {
-                var rt = this.addTrace(rname, "ref", false);
+                var rt = this.addTrace(rname, "ref", false, 1);
                 rt.ref = resp.refs[rname];
             }
         }
@@ -538,17 +580,15 @@ var jsplot = (function (module) {
         ctx.font = S.font;
         this._xmap = null;
 
-        var act = [], dataAct = [];
+        var dataAct = [], refAct = [];
         for (var i = 0; i < this.order.length; i++) {
-            var t = this.traces[this.order[i]];
-            if (!t.on)
+            var name = this.order[i], t = this.traces[name];
+            if (!this._anyOn(t))
                 continue;
-            if (t.type === "data" && t.resp) {
-                act.push(t);
-                dataAct.push(t);
-            } else if (t.type === "ref" && t.ref) {
-                act.push(t);
-            }
+            if (t.type === "data" && t.resp)
+                dataAct.push({name: name, t: t});
+            else if (t.type === "ref" && t.ref)
+                refAct.push({name: name, t: t});
         }
         if (dataAct.length === 0) {
             ctx.fillStyle = S.muted;
@@ -557,40 +597,42 @@ var jsplot = (function (module) {
             return;
         }
 
-        var lead = dataAct[0].resp;
+        var lead = dataAct[0].t.resp;
         var n = lead.data[0].length;
-        var isRGB = dataAct.length === 1 && lead.data.length === 3;
         var zmode = this.mode === "z";
         var pad = {l: 52, r: 14, t: 20, b: 28};
-        var stripH = isRGB ? 12 : 0;
-        var y0 = pad.t + (stripH ? stripH + 3 : 0);
+
+        // one labeled color strip per checked RGB dataset, stacked
+        var strips = [];
+        for (var di = 0; di < dataAct.length; di++)
+            if (dataAct[di].t.resp.data.length === 3)
+                strips.push(dataAct[di]);
+        var stripH = 12, stripGap = 2;
+        var y0 = pad.t + (strips.length ? strips.length * (stripH + stripGap) + 3 : 0);
         var plotH = H - y0 - pad.b;
         var x0 = pad.l, w = W - pad.l - pad.r;
 
-        // assemble the line list, applying the display-mode transform
-        var lines = [];   // {series, color, lw, alpha, own}: own=min-max scale
-        for (var a = 0; a < act.length; a++) {
-            var t = act[a];
-            if (t.type === "ref") {
-                lines.push({series: t.ref, color: t.color, lw: 1.1,
-                            alpha: 0.7, own: true});
-            } else if (t.resp.data.length === 3) {
-                var ccols = [S.chans.R, S.chans.G, S.chans.B];
-                for (var c = 0; c < 3; c++)
-                    lines.push({series: zmode ? this._zscore(t.resp.data[c])
-                                              : t.resp.data[c],
-                                color: ccols[c], lw: 1.4, alpha: 1, own: false});
-            } else {
-                lines.push({series: zmode ? this._zscore(t.resp.data[0])
-                                          : t.resp.data[0],
-                            color: t.color,
-                            lw: dataAct.length > 1 ? 1.4 : 1.7,
-                            alpha: 1, own: false});
+        // assemble the visible channel lines, applying the mode transform
+        var lines = [];   // {series, color, lw, alpha, own}
+        for (var di = 0; di < dataAct.length; di++) {
+            var t = dataAct[di].t;
+            for (var c = 0; c < t.channels.length; c++) {
+                if (!t.channels[c].on)
+                    continue;
+                lines.push({series: zmode ? this._zscore(t.resp.data[c])
+                                          : t.resp.data[c],
+                            color: t.channels[c].color,
+                            lw: 1.5, alpha: 1, own: false});
             }
         }
-        // shared y-range across all data traces: raw mode shows true values,
-        // z mode shows z units (reference traces stay min-max scaled — their
-        // units are arbitrary)
+        for (var ri = 0; ri < refAct.length; ri++)
+            lines.push({series: refAct[ri].t.ref,
+                        color: refAct[ri].t.channels[0].color,
+                        lw: 1.1, alpha: 0.7, own: true});
+
+        // shared y-range across all data channels: raw mode shows true
+        // values, z mode shows z units (reference traces stay min-max
+        // scaled — their units are arbitrary)
         var mn = Infinity, mx = -Infinity;
         for (var li = 0; li < lines.length; li++) {
             if (lines[li].own)
@@ -603,16 +645,24 @@ var jsplot = (function (module) {
 
         ctx.fillStyle = S.text;
         ctx.textAlign = "left";
-        ctx.fillText(this.label + (zmode ? "  ·  z-scored" : ""), x0, 13);
+        ctx.fillText(this.label, x0, 13);
 
-        if (isRGB && !zmode) {
-            var segW = w / n;
-            for (var i = 0; i < n; i++) {
-                ctx.fillStyle = "rgb(" + Math.round(lead.data[0][i] * 255) + "," +
-                    Math.round(lead.data[1][i] * 255) + "," +
-                    Math.round(lead.data[2][i] * 255) + ")";
-                ctx.fillRect(x0 + i * segW, pad.t, segW + 1, stripH);
+        // strips: always blend all three channels — they show the color
+        // actually painted on the brain, independent of line visibility
+        for (var si = 0; si < strips.length; si++) {
+            var sr = strips[si].t.resp;
+            var sy = pad.t + si * (stripH + stripGap);
+            var sn = sr.data[0].length;
+            var segW = w / sn;
+            for (var i = 0; i < sn; i++) {
+                ctx.fillStyle = "rgb(" + Math.round(sr.data[0][i] * 255) + "," +
+                    Math.round(sr.data[1][i] * 255) + "," +
+                    Math.round(sr.data[2][i] * 255) + ")";
+                ctx.fillRect(x0 + i * segW, sy, segW + 1, stripH);
             }
+            ctx.fillStyle = S.muted;
+            ctx.textAlign = "right";
+            ctx.fillText(strips[si].name, x0 - 6, sy + stripH - 2);
         }
 
         ctx.strokeStyle = S.spine;
@@ -655,16 +705,16 @@ var jsplot = (function (module) {
         for (var li = 0; li < lines.length; li++) {
             var L = lines[li];
             var py;
-            if (L.own || shared === null) {
+            if (L.own) {
                 var lmn = Math.min.apply(null, L.series);
                 var lmx = Math.max.apply(null, L.series);
                 if (lmn === lmx) { lmn -= 1; lmx += 1; }
-                py = (function(mn, mx) {
-                    return function(v) { return y0 + (1 - (v - mn) / (mx - mn)) * plotH; };
+                py = (function(a, b) {
+                    return function(v) { return y0 + (1 - (v - a) / (b - a)) * plotH; };
                 })(lmn, lmx);
             } else {
-                py = (function(mn, mx) {
-                    return function(v) { return y0 + (1 - (v - mn) / (mx - mn)) * plotH; };
+                py = (function(a, b) {
+                    return function(v) { return y0 + (1 - (v - a) / (b - a)) * plotH; };
                 })(shared[0], shared[1]);
             }
             ctx.strokeStyle = L.color;

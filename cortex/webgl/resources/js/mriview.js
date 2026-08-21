@@ -1051,11 +1051,11 @@ var mriview = (function(module) {
                     Math.round(coords.voxel.z);
             label = "voxel (" + voxel.split(",").join(", ") + ")";
         }
-        // fetch every dataset checked in the panel at this location
+        // fetch every dataset with at least one checked channel
         var names = [];
         for (var i = 0; i < tsplot.order.length; i++) {
             var t = tsplot.traces[tsplot.order[i]];
-            if (t.type === "data" && t.on)
+            if (t.type === "data" && tsplot._anyOn(t))
                 names.push(tsplot.order[i]);
         }
         if (names.length === 0)
