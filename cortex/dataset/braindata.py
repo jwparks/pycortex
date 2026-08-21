@@ -88,10 +88,15 @@ class BrainData(object):
         """
         sdict = super(BrainData, self).to_json(simple=simple)
         if simple:
+            d = self.data
+            if getattr(self, "movie", False) and d.size > 50_000_000:
+                # display bounds only: sample frames instead of scanning
+                # (and copying, via nan_to_num) a multi-GB movie
+                d = d[::max(1, len(d) // 8)]
             sdict.update(dict(name=self.name,
                 subject=self.subject,
-                min=float(np.nan_to_num(self.data).min()), 
-                max=float(np.nan_to_num(self.data).max()),
+                min=float(np.nan_to_num(d).min()),
+                max=float(np.nan_to_num(d).max()),
                 ))
         return sdict
 
@@ -677,6 +682,18 @@ class _masker(Generic[T_masker]):
 def _hash(array):
     '''A simple numpy hash function'''
     array = np.asarray(array)
+    if array.nbytes > 100_000_000:
+        # Byte-hashing multi-GB movie arrays stalls viewer startup for tens
+        # of seconds (tobytes() also copies the whole array). Fingerprint
+        # large arrays from shape, dtype and a deterministic ~4M-element
+        # stride sample instead.
+        sha = hashlib.sha1()
+        sha.update(str(array.shape).encode())
+        sha.update(str(array.dtype).encode())
+        flat = array.ravel()
+        sample = flat[::max(1, flat.size // 4_000_000)]
+        sha.update(np.ascontiguousarray(sample).tobytes())
+        return sha.hexdigest()
     return hashlib.sha1(array.tobytes()).hexdigest()
 
 def _hdf_write(h5, data, name="data", group="/data"):
