@@ -8,6 +8,9 @@ build-backend = "setuptools.build_meta"
 name = "pycortex"
 dynamic = ["authors", "license", "readme", "version", "classifiers", "dependencies"]
 
+[project.scripts]
+pycortex = "cortex.cli:main"
+
 [dependency-groups]
 dev = [
     {include-group = "test"},
