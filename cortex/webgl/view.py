@@ -391,33 +391,61 @@ def show(
     if open_browser is None:
         open_browser = options.config.get('webshow', 'open_browser', fallback='true') == 'true'
 
+    # Plain 1D numeric arrays in a data dict are not brain data: they become
+    # named reference traces (e.g. design-matrix regressors) overlaid in the
+    # timeseries panel.
+    ref_traces: dict[str, list[float]] = {}
+    if isinstance(data, dict):
+        data = dict(data)
+        for key in list(data.keys()):
+            val = data[key]
+            if (isinstance(val, np.ndarray) and val.ndim == 1
+                    and np.issubdtype(val.dtype, np.number)):
+                ref_traces[key] = np.nan_to_num(
+                    val.astype(np.float64)).tolist()
+                del data[key]
+
     data = dataset.normalize(data)
     if not isinstance(data, dataset.Dataset):
         data = dataset.Dataset(data=data)
 
     html = FallbackLoader([os.path.split(os.path.abspath(template))[0], serve.cwd]).load(template)
-    db.auxfile = data
 
-    #Extract the list of stimuli, for special-casing
+    # Heavy preparation (data packaging, surface cache) runs in _prepare()
+    # AFTER the server is already listening, so the viewer URL can be shown
+    # immediately. Request handlers block on _ready until preparation ends.
     stims: dict[str, str] = dict()
-    for name, view in data:
-        if 'stim' in view.attrs and os.path.exists(view.attrs['stim']):
-            sname = os.path.split(view.attrs['stim'])[1]
-            stims[sname] = view.attrs['stim']
+    package = None
+    metadata = ""
+    images: dict[str, list] = dict()
+    subjects: list[str] = []
+    ctms: dict[str, str] = dict()
+    subjectjs = ""
+    _ready = threading.Event()
 
-    package = Package(data)
-    metadata = json.dumps(package.metadata())
-    images = package.images
-    subjects = list(package.subjects)
+    def _prepare():
+        nonlocal package, metadata, subjects, subjectjs
+        db.auxfile = data
 
-    ctmargs = dict(method='mg2', level=9, recache=recache,
-        external_svg=overlay_file, overlays_available=overlays_available)
-    ctms = dict((subj, utils.get_ctmpack(subj, types, **ctmargs))
-                for subj in subjects)
-    package.reorder(ctms)
+        #Extract the list of stimuli, for special-casing
+        for name, view in data:
+            if 'stim' in view.attrs and os.path.exists(view.attrs['stim']):
+                sname = os.path.split(view.attrs['stim'])[1]
+                stims[sname] = view.attrs['stim']
 
-    subjectjs = json.dumps(dict((subj, "ctm/%s/"%subj) for subj in subjects))
-    db.auxfile = None
+        package = Package(data, lazy=True)
+        metadata = json.dumps(package.metadata())
+        images.update(package.images)
+        subjects = list(package.subjects)
+
+        ctmargs = dict(method='mg2', level=9, recache=recache,
+            external_svg=overlay_file, overlays_available=overlays_available)
+        ctms.update((subj, utils.get_ctmpack(subj, types, **ctmargs))
+                    for subj in subjects)
+        package.reorder(ctms)
+
+        subjectjs = json.dumps(dict((subj, "ctm/%s/"%subj) for subj in subjects))
+        db.auxfile = None
 
 
     linear = lambda x, y, m: (1.-m)*x + m*y
@@ -463,6 +491,11 @@ def show(
 
     class CTMHandler(web.RequestHandler):
         def get(self, path: str):
+            _ready.wait()
+            # surface meshes are immutable per cache filename: let the
+            # browser reuse them across page reloads (matters over SSH
+            # tunnels, where the mesh dominates reload time)
+            self.set_header("Cache-Control", "public, max-age=86400")
             subj, path = path.split('/')
             if path == '':
                 self.set_header("Content-Type", "application/json")
@@ -477,6 +510,7 @@ def show(
 
     class DataHandler(web.RequestHandler):
         def get(self, path: str):
+            _ready.wait()
             path = path.strip("/")
             frame: Union[int, str]
             try:
@@ -486,7 +520,10 @@ def show(
                 frame = 0
 
             if dataname in images:
-                dataimg = images[dataname][int(frame)]
+                # data names are content hashes, so frames are immutable and
+                # safe for the browser to cache across reloads
+                self.set_header("Cache-Control", "public, max-age=86400")
+                dataimg = package.get_image(dataname, int(frame))
                 if dataimg[1:6] == "NUMPY":
                     self.set_header("Content-Type", "application/octet-stream")
                 else:
@@ -512,6 +549,7 @@ def show(
             pass
 
         def get(self, path: str):
+            _ready.wait()
             if path not in stims:
                 self.set_status(404)
                 self.write_error(404)
@@ -525,6 +563,7 @@ def show(
 
     class MixerHandler(web.RequestHandler):
         def get(self):
+            _ready.wait()
             self.set_header("Content-Type", "text/html")
             generated = html.generate(data=metadata,
                                       colormaps=colormaps,
@@ -899,6 +938,7 @@ def show(
 
     class PickerHandler(web.RequestHandler):
         def get(self):
+            _ready.wait()
             voxel_arg = self.get_argument("voxel", None)
             if voxel_arg is None:
                 self.set_status(400)
@@ -919,6 +959,88 @@ def show(
             hemi: str = self.get_argument("hemi")
             pickerfun(voxel, vertex, hemi)
 
+    # The browser's pick reports vertices in CTM (transmission) order; the
+    # ctmpack's index array maps a concatenated (left-then-right) CTM
+    # position back to the original vertex numbering that Vertex data uses.
+    ctm_vertex_index: dict[str, np.ndarray] = {}
+    def _get_ctm_index(subj):
+        if subj not in ctm_vertex_index:
+            npz = np.load(os.path.splitext(ctms[subj])[0] + ".npz")
+            ctm_vertex_index[subj] = npz["index"]
+        return ctm_vertex_index[subj]
+
+    class TimeseriesHandler(web.RequestHandler):
+        """Return one voxel's (or vertex's) timecourse as JSON, on demand.
+
+        The 4D data stays in this python process; each click costs ~2 KB.
+        Response: {name, channels, data, vertex, refs}, where data holds one
+        list per channel (a single channel for scalar views) indexed by
+        volume number, and refs carries the 1D reference traces passed to
+        show().
+        """
+        def get(self):
+            _ready.wait()
+            views = dict(data)
+            name = self.get_argument("name", None)
+            if name is None:
+                name = next(iter(views), None)
+            view = views.get(name)
+            if view is None:
+                self.set_status(404)
+                self.finish({"error": "no dataview named %r" % name})
+                return
+            if not getattr(view, "movie", False):
+                self.set_status(422)
+                self.finish({"error": "dataview %r has no time axis" % name})
+                return
+
+            vertex = None
+            try:
+                if isinstance(view, (dataset.Vertex, dataset.VertexRGB)):
+                    base = view.red if isinstance(view, dataset.VertexRGB) else view
+                    vertex = int(self.get_argument("vertex"))
+                    if self.get_argument("hemi") == "right":
+                        vertex += base.llen
+                    vertex = int(_get_ctm_index(base.subject)[vertex])
+                    if isinstance(view, dataset.VertexRGB):
+                        # slice each channel view directly: assembling the
+                        # full RGBA array via .vertices copies the whole
+                        # movie per request
+                        chans = [c.vertices[:, vertex]
+                                 for c in (view.red, view.green, view.blue)]
+                    else:
+                        chans = [view.vertices[:, vertex]]
+                elif isinstance(view, (dataset.Volume, dataset.VolumeRGB)):
+                    x, y, z = (int(i) for i in
+                               self.get_argument("voxel").split(","))
+                    if isinstance(view, dataset.VolumeRGB):
+                        chans = [c.volume[:, z, y, x]
+                                 for c in (view.red, view.green, view.blue)]
+                    else:
+                        chans = [view.volume[:, z, y, x]]
+                else:
+                    self.set_status(422)
+                    self.finish({"error": "unsupported dataview type %s"
+                                 % type(view).__name__})
+                    return
+            except (ValueError, IndexError, web.MissingArgumentError) as exc:
+                self.set_status(400)
+                self.finish({"error": str(exc)})
+                return
+
+            def norm(ts):
+                ts = np.asarray(ts)
+                if ts.dtype == np.uint8:  # RGB channels: bytes -> [0, 1]
+                    ts = ts / 255.0
+                return np.nan_to_num(ts.astype(np.float64))
+            chans = [norm(ts) for ts in chans]
+            channels = ["R", "G", "B"] if len(chans) == 3 else ["bold"]
+            resp = dict(name=name, channels=channels,
+                        data=[ts.tolist() for ts in chans],
+                        vertex=vertex, refs=ref_traces or None)
+            self.set_header("Content-Type", "application/json")
+            self.finish(json.dumps(resp))
+
     class WebApp(serve.WebApp):
         disconnect_on_close = autoclose
         def get_client(self):
@@ -937,6 +1059,7 @@ def show(
                      (r'/stim/(.*)', StimHandler),
                      (r'/mixer.html', MixerHandler),
                      (r'/picker', PickerHandler),
+                     (r'/timeseries', TimeseriesHandler),
                      (r'/', MixerHandler),
                      (r'/static/(.*)', StaticHandler)],
                     port)
@@ -944,16 +1067,29 @@ def show(
     server.start()
     print("Started server on port %d"%server.port)
     url = "http://%s%s:%d/mixer.html"%(serve.hostname, domain_name, server.port)
+    # Show the URL before the heavy preparation: the server already accepts
+    # connections and its handlers wait on _ready, so an early page load
+    # simply spins until the data is packaged.
+    if display_url and not open_browser:
+        try:
+            from IPython.display import HTML, display
+            display(HTML('Open viewer: <a href="{0}" target="_blank">{0}</a>'.format(url)))
+        except Exception:
+            print("Open viewer: %s" % url)
+        if "SSH_CONNECTION" in os.environ:
+            print("Remote session detected -- after forwarding the port, "
+                  "open: http://localhost:%d/mixer.html" % server.port)
+
+    try:
+        _prepare()
+    except Exception:
+        server.stop()
+        raise
+    _ready.set()
+
     if open_browser:
         webbrowser.open(url)
         client = server.get_client()
         client.server = server
         return client
-    elif display_url:
-        try:
-            from IPython.display import HTML, display
-            display(HTML('Open viewer: <a href="{0}" target="_blank">{0}</a>'.format(url)))
-        except:
-            pass
-
     return server
