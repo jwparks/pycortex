@@ -11,6 +11,7 @@ See examples/cli/CLI.md for the full command reference and roadmap.
 import argparse
 import os
 import sys
+import threading
 
 
 def _die(msg):
@@ -97,9 +98,10 @@ def cmd_view(args):
     handle = cortex.webgl.show(data, port=args.port,
                                open_browser=not args.no_browser,
                                recache=args.recache)
-    # show() returns the WebApp thread (open_browser=False) or a JS client
-    # whose .server is that thread
-    server = handle if hasattr(handle, "join") else handle.server
+    # show() returns the WebApp thread (open_browser=False) or a JS proxy
+    # whose .server is that thread. The proxy raises KeyError for unknown
+    # attributes (hasattr would blow up), so test the type instead.
+    server = handle if isinstance(handle, threading.Thread) else handle.server
     try:
         server.join()
     except KeyboardInterrupt:
