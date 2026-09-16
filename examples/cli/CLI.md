@@ -23,7 +23,7 @@ dataset (`.hdf`, loaded via `cortex.load`).
 
 ## 1. Viewers
 
-### `pycortex view` — `T1`
+### `pycortex view`
 
 Open data in the live WebGL viewer (the fsleyes moment).
 
@@ -50,7 +50,7 @@ Remote session detected -- after forwarding the port, open: http://localhost:889
 4D input opens with the timeseries panel available (movie controls →
 timeseries). See the timeseries feature documentation.
 
-### `pycortex flatmap` — `T1`
+### `pycortex flatmap`
 
 Render data to a flatmap image. Pure file→file, no GUI.
 
@@ -72,7 +72,7 @@ $ pycortex flatmap statmap.nii.gz S1 fullhead -o statmap_flat.png --with-rois --
 wrote statmap_flat.png  (2436 x 1024 px, 28 ROI outlines)
 ```
 
-### `pycortex static` — `T2`
+### `pycortex static`
 
 Write a self-contained static WebGL viewer to a directory (shareable,
 no server needed).
@@ -86,7 +86,7 @@ $ pycortex static ./viewer_out statmap.nii.gz S1 fullhead
 wrote static viewer to ./viewer_out  (open index.html in a browser)
 ```
 
-### `pycortex snapshot` — `T3` (playwright)
+### `pycortex snapshot`
 
 Save 3D surface views from named camera angles, headless.
 
@@ -98,7 +98,7 @@ pycortex snapshot <data> <subject> <xfm> -o fig.png --angles lateral_pivot,media
 
 ## 2. Database inspection
 
-### `pycortex subjects` — `T1`
+### `pycortex subjects`
 
 ```console
 $ pycortex subjects
@@ -107,7 +107,7 @@ Pycortex database  (/data/jiwoongpark/pycortex/filestore/db)
   fsaverage   surfaces: wm, pia, inflated, flat   transforms: -
 ```
 
-### `pycortex info` — `T1`
+### `pycortex info`
 
 Summarize one subject, or one transform.
 
@@ -128,7 +128,7 @@ reference:   100 x 100 x 31  @  2.24 x 2.24 x 4.13 mm
 expected data shape (z, y, x): (31, 100, 100)
 ```
 
-### `pycortex rois` — `T2`
+### `pycortex rois`
 
 ```console
 $ pycortex rois S1
@@ -137,7 +137,7 @@ rois:   V1  V2  V3  V3A  V3B  V4  V7  LO  MT  EBA  FFA  OFA  PPA  OPA  RSC
 sulci:  CaS  CeS  StS
 ```
 
-### `pycortex check` — `T2`
+### `pycortex check`
 
 Which transform fits this file?
 
@@ -148,7 +148,7 @@ matches:     S1 / fullhead  (shape and affine agree)
 suggestion:  pycortex view bold.nii.gz S1 fullhead
 ```
 
-### `pycortex config` — `T2`
+### `pycortex config`
 
 ```console
 $ pycortex config
@@ -157,11 +157,11 @@ filestore:    /data/jiwoongpark/pycortex/filestore/db
 colormaps:    /data/jiwoongpark/pycortex/filestore/colormaps
 ```
 
-### `pycortex colormaps` — `T2`
+### `pycortex colormaps`
 
 List available colormap names (one per line, pipe-friendly).
 
-### `pycortex cache` — `T2`
+### `pycortex cache`
 
 ```
 pycortex cache warm  <subject>        # precompute WebGL surface bundle
@@ -172,7 +172,7 @@ pycortex cache clear <subject> --yes  # delete cached flatmaps/CTMs
 
 ## 3. Subject setup
 
-### `pycortex download` — `T1`
+### `pycortex download`
 
 Fetch a prepackaged subject into the filestore. Zero setup.
 
@@ -182,7 +182,7 @@ downloading fsaverage ... done
 installed subject 'fsaverage' into /data/jiwoongpark/pycortex/filestore/db
 ```
 
-### `pycortex import fmriprep` — `T2` (no external deps)
+### `pycortex import fmriprep` 
 
 Import a subject from fMRIPrep derivatives (needs `fmriprep/` and
 `freesurfer/` subfolders in the derivatives directory). Pure file copy.
@@ -192,7 +192,7 @@ $ pycortex import fmriprep sub-01 /data/study/derivatives
 imported sub-01  (surfaces + transforms from fMRIPrep derivatives)
 ```
 
-### `pycortex import freesurfer` — `T3` (FreeSurfer)
+### `pycortex import freesurfer`
 
 ```console
 $ pycortex import freesurfer bert --subjects-dir $SUBJECTS_DIR
@@ -203,7 +203,7 @@ imported FreeSurfer subject 'bert' as pycortex subject 'bert'
 
 ## 4. Transforms and alignment
 
-### `pycortex xfm list` — `T2`
+### `pycortex xfm list`
 
 ```console
 $ pycortex xfm list S1
@@ -211,7 +211,7 @@ fullhead     coord   reference: 100 x 100 x 31
 retinotopy   coord   reference: 72 x 72 x 22
 ```
 
-### `pycortex xfm import` — `T1`
+### `pycortex xfm import`
 
 Convert an existing FSL / FreeSurfer registration into the database.
 
@@ -225,13 +225,13 @@ $ pycortex xfm import sub-006 retino --from-fsl flirt.mat --func bold.nii.gz --a
 saved transform 'retino' for sub-006  (reference: 97 x 101 x 91 @ 2.0 mm)
 ```
 
-### `pycortex xfm export` — `T2`
+### `pycortex xfm export`
 
 ```
 pycortex xfm export <subject> <name> --to-fsl out.mat --anat anat.nii.gz
 ```
 
-### `pycortex align auto` — `T3` (FreeSurfer; `auto-fsl` variant needs FSL)
+### `pycortex align auto`
 
 Automatic functional↔anatomical alignment, saved into the database.
 
@@ -241,7 +241,7 @@ running bbregister ... done  (final cost: 0.4123)
 saved transform 'run1' for sub-006
 ```
 
-### `pycortex align manual` — `T3` (FreeSurfer)
+### `pycortex align manual`
 
 Open FreeView to inspect or hand-tune an alignment:
 `pycortex align manual sub-006 run1`.
@@ -250,14 +250,14 @@ Open FreeView to inspect or hand-tune an alignment:
 
 ## 5. Masks and QC
 
-### `pycortex mask` — `T2`
+### `pycortex mask`
 
 ```console
 $ pycortex mask S1 fullhead -o cortex_mask.nii.gz --type thick
 wrote cortex_mask.nii.gz  (54,231 cortical voxels, type=thick)
 ```
 
-### `pycortex roi-masks` — `T2`
+### `pycortex roi-masks`
 
 ```console
 $ pycortex roi-masks S1 fullhead -o rois.nii.gz --index-volume
@@ -265,7 +265,7 @@ wrote rois.nii.gz  (index volume, 28 ROIs; left = negative, right = positive)
 wrote rois.json    (index -> ROI name)
 ```
 
-### `pycortex dropout` — `T2`
+### `pycortex dropout`
 
 One-command signal-dropout QC image.
 
@@ -278,47 +278,19 @@ wrote dropout.png  (regions with low EPI signal highlighted)
 
 ## Roadmap
 
-### Tier 1 — hackathon (needed for the presentation)
+### Done
 
-| Command | Wraps | Effort |
-|---|---|---|
-| `pycortex view` | `cortex.webgl.show` | small — arg plumbing over existing API |
-| `pycortex subjects` | `cortex.db.subjects` | trivial |
-| `pycortex info` | `db.get_paths`, `db.get_xfm`, `nibabel` headers | small |
-| `pycortex download` | `cortex.utils.download_subject` | trivial |
-| `pycortex flatmap` | `cortex.quickflat.make_png/make_svg` | small |
-| `pycortex xfm import` | `Transform.from_fsl/.from_freesurfer` + `.save` | small |
+| Command | Wraps | 
+|---|---|
+| `pycortex view` | `cortex.webgl.show` |
+| `pycortex subjects` | `cortex.db.subjects` | 
+| `pycortex info` | `db.get_paths`, `db.get_xfm`, `nibabel` headers |
+| `pycortex download` | `cortex.utils.download_subject` | 
+| `pycortex flatmap` | `cortex.quickflat.make_png/make_svg` | 
+| `pycortex xfm import` | `Transform.from_fsl/.from_freesurfer` + `.save` | 
 
-Shared plumbing built once: entry point + subparsers, the
-`(path, subject, xfm) → Volume / cortex.load` data shim, friendly error
-messages (unknown subject → list; shape mismatch → suggest transform).
-
-### Tier 2 — next
+### TODO
 
 `rois`, `check`, `config`, `colormaps`, `cache`, `static`,
 `import fmriprep`, `xfm list/export`, `mask`, `roi-masks`, `dropout`.
-All zero-dependency; each is a thin wrapper.
 
-### Tier 3 — external tools required
-
-`align auto` / `align auto-fsl` / `align manual` (FreeSurfer / FSL),
-`import freesurfer` (FreeSurfer), `snapshot` (playwright + Chromium),
-MNI transforms (FSL). Guard each with a clear error when the binary is
-missing.
-
-### Out of scope
-
-- `quickflat.make_movie`, `epi2anatspace_fsl`, `anat2epispace_fsl` —
-  currently raise `NotImplementedError` in pycortex itself.
-- mayavi-based tools (`mayavi_manual`, `fix_wm/fix_pia`) — deprecated
-  upstream.
-
-### Implementation notes
-
-- Several wrapped functions block on `input()` prompts
-  (`db.make_subj`, `db.clear_cache`, `freesurfer.autorecon`, ...);
-  every CLI wrapper needs a `--yes` / `--force` passthrough.
-- Import subcommand modules lazily: `cortex.mni` warns at import time
-  when `$FSLDIR` is unset, and heavy imports slow every invocation.
-- After adding the entry point, one `pip install -e .` re-run is needed
-  for the `pycortex` command to appear.
